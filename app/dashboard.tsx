@@ -89,7 +89,8 @@ const watchLocation = async (callback: (coords: { latitude: number; longitude: n
 };
 import { ref, update, onValue, off, remove, set } from 'firebase/database';
 import { clearDriverPresence } from '@/utils/driverPresence';
-import { Home, Mail, Clock, Settings } from 'lucide-react-native';
+import { Home, Mail, Clock, Settings, Phone } from 'lucide-react-native';
+import { useCall } from '@/context/CallContext';
 import ChatPanel from '@/components/ChatPanel';
 import InboxPanel from '@/components/InboxPanel';
 import ToastNotification from '@/components/ToastNotification';
@@ -134,8 +135,9 @@ export default function Dashboard() {
   }, [router]);
 
   // Active trip from Firestore orders (drives the live map polylines + markers)
-  const { tripStatus, workflowType, markers, activePolyline, showPolyline, arrivalTime } =
+  const { activeTrip, tripStatus, workflowType, markers, activePolyline, showPolyline, arrivalTime } =
     useActiveTrip(driverId);
+  const { callState, formattedTime, startCall } = useCall();
 
   // Arrival card anchors at the coordinate matching the current trip phase:
   //   direct_trip accepted -> pickup, store_delivery accepted -> store,
@@ -718,6 +720,12 @@ if (activeTab === 'settings') {
 
       {/* FULL SCREEN MAP BACKGROUND - real interactive map */}
       <View style={styles.mapFullScreen}>
+        {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Call rider" disabled={callState === 'in-call'} onPress={() => startCall(activeTrip.orderId)} style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}>
+            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
+            {callState === 'in-call' && <Text style={styles.callTimer}>{formattedTime}</Text>}
+          </TouchableOpacity>
+        )}
         <DriverMap
           polyline={showPolyline ? activePolyline || undefined : undefined}
           vehiclePosition={vehiclePosition || undefined}
@@ -876,8 +884,30 @@ const styles = StyleSheet.create({
   loadingContainer: { justifyContent: 'center', alignItems: 'center' },
 
   // Full screen map background
+  callButton: {
+  position: 'absolute',
+  top: 72,
+  right: 18,
+  zIndex: 20,
+  minWidth: 52,
+  height: 52,
+  borderRadius: 26,
+  backgroundColor: '#F6FBF7',
+  alignItems: 'center',
+  justifyContent: 'center',
+  flexDirection: 'row',
+  gap: 8,
+  shadowColor: '#000',
+  shadowOpacity: 0.18,
+  shadowRadius: 8,
+  shadowOffset: { width: 0, height: 3 },
+  elevation: 8,
+  paddingHorizontal: 14,
+  },
+  callButtonActive: { backgroundColor: '#16A34A' },
+  callTimer: { color: '#fff', fontWeight: '700', fontSize: 13 },
   mapFullScreen: {
-    position: 'absolute',
+  position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
