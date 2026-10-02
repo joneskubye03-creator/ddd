@@ -138,6 +138,21 @@ export default function Dashboard() {
   const { activeTrip, tripStatus, workflowType, markers, activePolyline, showPolyline, arrivalTime } =
     useActiveTrip(driverId);
   const { callState, formattedTime, startCall } = useCall();
+  const callPulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (callState !== 'calling') {
+      callPulse.stopAnimation();
+      callPulse.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(callPulse, { toValue: 0.35, duration: 650, useNativeDriver: true }),
+      Animated.timing(callPulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [callPulse, callState]);
 
   // Arrival card anchors at the coordinate matching the current trip phase:
   //   direct_trip accepted -> pickup, store_delivery accepted -> store,
@@ -720,12 +735,6 @@ if (activeTab === 'settings') {
 
       {/* FULL SCREEN MAP BACKGROUND - real interactive map */}
       <View style={styles.mapFullScreen}>
-        {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
-          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Call rider" disabled={callState === 'in-call'} onPress={() => startCall(activeTrip.orderId)} style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}>
-            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
-            {callState === 'in-call' && <Text style={styles.callTimer}>{formattedTime}</Text>}
-          </TouchableOpacity>
-        )}
         <DriverMap
           polyline={showPolyline ? activePolyline || undefined : undefined}
           vehiclePosition={vehiclePosition || undefined}
@@ -737,6 +746,21 @@ if (activeTab === 'settings') {
           hasActiveTrip={hasActiveTrip}
         />
       </View>
+
+      {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Call rider"
+          disabled={callState !== 'idle'}
+          onPress={() => startCall(activeTrip.orderId)}
+          style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}
+        >
+          <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
+            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
+          </Animated.View>
+          {callState === 'in-call' && <Text style={styles.callTimer}>{formattedTime}</Text>}
+        </TouchableOpacity>
+      )}
 
       {/* DRAGGABLE SLIDING PANEL - Contains toggle inside */}
       <Animated.View
@@ -885,24 +909,21 @@ const styles = StyleSheet.create({
 
   // Full screen map background
   callButton: {
-  position: 'absolute',
-  top: 72,
-  right: 18,
-  zIndex: 20,
-  minWidth: 52,
-  height: 52,
-  borderRadius: 26,
-  backgroundColor: '#F6FBF7',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexDirection: 'row',
-  gap: 8,
-  shadowColor: '#000',
-  shadowOpacity: 0.18,
-  shadowRadius: 8,
-  shadowOffset: { width: 0, height: 3 },
-  elevation: 8,
-  paddingHorizontal: 14,
+    position: 'absolute',
+    right: 16,
+    top: '40%',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   callButtonActive: { backgroundColor: '#16A34A' },
   callTimer: { color: '#fff', fontWeight: '700', fontSize: 13 },
