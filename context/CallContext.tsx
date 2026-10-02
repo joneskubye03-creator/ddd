@@ -24,8 +24,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   callStateRef.current = callState; elapsedRef.current = elapsedSeconds;
   const stopTimer = () => { if (timerRef.current) clearInterval(timerRef.current); timerRef.current = null; };
   const clearRingTimeout = () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); timeoutRef.current = null; };
-  const stopRingtone = () => { try { player.pause(); } catch {} try { player.seekTo(0); } catch {} ringStateRef.current = false; clearRingTimeout(); };
-  const startRingtone = () => { try { player.loop = true; } catch {} try { player.play(); } catch {} ringStateRef.current = true; };
+  const stopRingtone = () => { ringStateRef.current = false; try { player.pause(); } catch {} try { player.seekTo(0); } catch {} clearRingTimeout(); };
+  const playRingtone = () => { try { return Promise.resolve(player.play()).catch(() => undefined); } catch { return Promise.resolve(); } };
+  const startRingtone = () => { try { player.loop = true; } catch {} ringStateRef.current = true; void playRingtone(); };
   const leaveConnection = async () => { const active = connectionRef.current; connectionRef.current = null; if (active) await active.leave().catch(() => undefined); };
   const token = async () => { const user = auth.currentUser; if (!user) throw new Error('You must be signed in'); return user.getIdToken(); };
   const showEnded = (message: string) => { setEndedMessage(message); setCallState('ended'); setTimeout(() => { setCallState('idle'); setEndedMessage(''); sessionCall.current = null; currentRef.current = null; sawCall.current = false; }, 2500); };
@@ -35,7 +36,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const endCall = async (reason?: string) => { if (endingRef.current) return; endingRef.current = true; const snapshot = currentRef.current; const wasInCall = callStateRef.current === 'in-call' || !!snapshot?.startedAt; const duration = elapsedRef.current; const callId = snapshot?.callId; try { if (callId) { try { await service.endCallApi(callId, await token(), reason); } catch {} } await finish(reason === 'no_answer' ? 'No answer' : wasInCall ? `Call ended · ${formatTime(duration)}` : 'Call cancelled'); } finally { endingRef.current = false; } };
   endCallRef.current = endCall;
 
-  useEffect(() => { if (Platform.OS !== 'web') return; const unlock = () => { try { player.play(); } catch {} try { player.pause(); } catch {} }; window.addEventListener('pointerdown', unlock, { once: true }); return () => window.removeEventListener('pointerdown', unlock); }, [player]);
+  useEffect(() => { if (Platform.OS !== 'web') return; const unlock = () => { void playRingtone(); try { player.pause(); } catch {} }; window.addEventListener('pointerdown', unlock, { once: true }); return () => window.removeEventListener('pointerdown', unlock); }, [player]);
   useEffect(() => {
     let unsubscribeCall: (() => void) | undefined; let unsubscribeOffset: (() => void) | undefined;
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => { unsubscribeCall?.(); unsubscribeOffset?.(); if (!user) { currentRef.current = null; sessionCall.current = null; sawCall.current = false; stopRingtone(); stopTimer(); void leaveConnection(); return; }
