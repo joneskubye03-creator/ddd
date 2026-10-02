@@ -750,7 +750,7 @@ if (activeTab === 'settings') {
       {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
         <TouchableOpacity
           accessibilityRole="button"
-          accessibilityLabel="Call rider"
+          accessibilityLabel={callState === 'idle' ? 'Call client' : callState === 'calling' ? 'Calling' : `In call · ${formattedTime}`}
           disabled={callState !== 'idle'}
           onPress={() => startCall(activeTrip.orderId)}
           style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}
@@ -758,7 +758,7 @@ if (activeTab === 'settings') {
           <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
             <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
           </Animated.View>
-          {callState === 'in-call' && <Text style={styles.callTimer}>{formattedTime}</Text>}
+          <Text style={[styles.callTimer, callState !== 'in-call' && styles.callTimerLight]}>{callState === 'idle' ? 'Call client' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}</Text>
         </TouchableOpacity>
       )}
 
@@ -912,9 +912,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16,
     top: '40%',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+height: 56,
+  paddingHorizontal: 16,
+  borderRadius: 28,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
@@ -927,6 +927,7 @@ const styles = StyleSheet.create({
   },
   callButtonActive: { backgroundColor: '#16A34A' },
   callTimer: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  callTimerLight: { color: '#18201b' },
   mapFullScreen: {
   position: 'absolute',
     top: 0,
