@@ -12,7 +12,7 @@ const service = Platform.OS === 'web' ? require('@/services/callService.web') : 
 type State = 'idle' | 'calling' | 'ringing' | 'in-call' | 'ended';
 type Snapshot = { callId?: string; orderId?: string; channel?: string; direction?: 'incoming' | 'outgoing'; peerName?: string; status?: string; endReason?: string; expiresAt?: number; startedAt?: number; endedAt?: number; durationSeconds?: number; appId?: string; token?: string; uid?: string | number };
 type Connection = { leave: () => Promise<void>; setMuted: (muted: boolean) => Promise<void> };
-type ContextValue = { callState: State; peerName: string; elapsedSeconds: number; formattedTime: string; isMuted: boolean; endedMessage: string; startCall: (orderId: string) => Promise<void>; answerCall: () => Promise<void>; declineCall: () => Promise<void>; endCall: () => Promise<void>; toggleMute: () => Promise<void> };
+type ContextValue = { callState: State; peerName: string; elapsedSeconds: number; formattedTime: string; isMuted: boolean; endedMessage: string; startCall: (orderId: string, target?: 'store') => Promise<void>; answerCall: () => Promise<void>; declineCall: () => Promise<void>; endCall: () => Promise<void>; toggleMute: () => Promise<void> };
 const CallContext = createContext<ContextValue | null>(null);
 const terminal = new Set(['ended', 'declined', 'missed']);
 const formatTime = (seconds: number) => seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}` : `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -53,8 +53,8 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     });
     return () => { unsubscribeAuth(); unsubscribeCall?.(); unsubscribeOffset?.(); clearRingTimeout(); stopTimer(); stopRingtone(); void leaveConnection(); };
   }, [player]);
-  const startCall = async (orderId: string) => { endingRef.current = false; clearRingTimeout(); stopTimer(); setElapsedSeconds(0); setIsMuted(false); currentRef.current = null; sessionCall.current = null; sawCall.current = false; setPeerName('Rider'); setCallState('calling'); let callId: string | undefined;
-    try { const result = await service.startCallApi(orderId, await token()); callId = result.callId; sessionCall.current = callId || null; sawCall.current = true; currentRef.current = { ...result, callId, orderId, direction: 'outgoing', status: 'ringing' }; await join(result); }
+  const startCall = async (orderId: string, target?: 'store') => { endingRef.current = false; clearRingTimeout(); stopTimer(); setElapsedSeconds(0); setIsMuted(false); currentRef.current = null; sessionCall.current = null; sawCall.current = false; setPeerName(target === 'store' ? 'Store' : 'Rider'); setCallState('calling'); let callId: string | undefined;
+    try { const result = await service.startCallApi(orderId, await token(), target); callId = result.callId; sessionCall.current = callId || null; sawCall.current = true; currentRef.current = { ...result, callId, orderId, direction: 'outgoing', status: 'ringing' }; await join(result); }
     catch (error: any) { if (callId) { try { await service.endCallApi(callId, await token()); } catch {} } await finish(error?.name === 'NotAllowedError' || /microphone|permission/i.test(error?.message || '') ? 'Microphone access is blocked. Allow it in the browser and try again.' : (error?.message || 'Unable to start call')); }
   };
   const answerCall = async () => { const callId = currentRef.current?.callId; if (!callId) return; try { const result = await service.acceptCallApi(callId, await token()); stopRingtone(); await join({ ...currentRef.current, ...result }); setCallState('in-call'); } catch (error: any) { try { await service.declineCallApi(callId, await token()); } catch {} await finish(error?.message || 'Unable to answer call'); } };

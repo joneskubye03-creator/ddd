@@ -762,6 +762,21 @@ if (activeTab === 'settings') {
         </TouchableOpacity>
       )}
 
+      {activeTrip && workflowType === 'store_delivery' && ['accepted', 'at_store'].includes(tripStatus || '') && (
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel={callState === 'idle' ? 'Call store' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}
+          disabled={callState !== 'idle'}
+          onPress={() => startCall(activeTrip.orderId, 'store')}
+          style={[styles.callButton, { transform: [{ translateY: 70 }] }, callState === 'in-call' && styles.callButtonActive]}
+        >
+          <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
+            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
+          </Animated.View>
+          <Text style={[styles.callTimer, callState !== 'in-call' && styles.callTimerLight]}>{callState === 'idle' ? 'Call store' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}</Text>
+        </TouchableOpacity>
+      )}
+
       {/* DRAGGABLE SLIDING PANEL - Contains toggle inside */}
       <Animated.View
         style={[

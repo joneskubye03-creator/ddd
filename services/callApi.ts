@@ -31,7 +31,8 @@ export async function callApi(path: string, body: Record<string, unknown>, idTok
   return result;
 }
 
-export const startCallApi = (orderId: string, idToken: string) => callApi('/api/calls/start', { orderId }, idToken);
+export const startCallApi = (orderId: string, idToken: string, target?: 'store') =>
+  callApi('/api/calls/start', { orderId, ...(target ? { target } : {}) }, idToken);
 export const acceptCallApi = (callId: string, idToken: string) => callApi('/api/calls/accept', { callId }, idToken);
 export const declineCallApi = (callId: string, idToken: string) => callApi('/api/calls/decline', { callId }, idToken);
 export const endCallApi = (callId: string, idToken: string, reason?: string) =>
