@@ -130,6 +130,7 @@ export default function Dashboard() {
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [vehiclePosition, setVehiclePosition] = useState<{ lat: number; lng: number; heading: number } | null>(null);
   const stableHeadingRef = useRef(0);
+  const lastAcceptedPositionRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -416,8 +417,31 @@ export default function Dashboard() {
 
       const subscription = await watchLocation(async (coords) => {
         const { latitude, longitude, heading, speed } = coords;
-        const hasReliableHeading = Number.isFinite(heading) && heading >= 0 && speed > 0.8;
-        if (hasReliableHeading) stableHeadingRef.current = heading;
+        const previous = lastAcceptedPositionRef.current;
+        const toRadians = (value: number) => value * Math.PI / 180;
+        const earthRadius = 6371000;
+        const distance = previous
+          ? 2 * earthRadius * Math.asin(Math.sqrt(
+              Math.sin(toRadians(latitude - previous.latitude) / 2) ** 2 +
+              Math.cos(toRadians(previous.latitude)) * Math.cos(toRadians(latitude)) *
+              Math.sin(toRadians(longitude - previous.longitude) / 2) ** 2
+            ))
+          : 0;
+        let nextHeading = stableHeadingRef.current;
+        if (previous && distance >= 5) {
+          const y = Math.sin(toRadians(longitude - previous.longitude)) * Math.cos(toRadians(latitude));
+          const x = Math.cos(toRadians(previous.latitude)) * Math.sin(toRadians(latitude)) -
+            Math.sin(toRadians(previous.latitude)) * Math.cos(toRadians(latitude)) *
+            Math.cos(toRadians(longitude - previous.longitude));
+          const bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+          const headingDelta = Math.abs(((bearing - stableHeadingRef.current + 540) % 360) - 180);
+          if (headingDelta <= 120 || distance >= 15) nextHeading = bearing;
+        } else if (Number.isFinite(heading) && heading >= 0 && speed > 1.5) {
+          const headingDelta = Math.abs(((heading - stableHeadingRef.current + 540) % 360) - 180);
+          if (headingDelta <= 120 || distance >= 15) nextHeading = heading;
+        }
+        if (distance >= 5) lastAcceptedPositionRef.current = { latitude, longitude };
+        stableHeadingRef.current = nextHeading;
 
         setCurrentLocation({ latitude, longitude });
         setLocationPermissionDenied(false);

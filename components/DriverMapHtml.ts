@@ -22,10 +22,8 @@ const VEHICLE_IMAGE_MAP: Record<string, Record<string, string>> = {
  open_truck:{b:aopenbDataUri,bl:aopenblDataUri,g:aopengDataUri,r:aopenrDataUri,w:aopenwDataUri}, refrigerated_truck:{b:atruckbDataUri,bl:atruckblDataUri,g:atruckgDataUri,r:atruckrDataUri,w:atruckwDataUri}
 };
 const DEFAULT_VEHICLE = VEHICLE_IMAGE_MAP.economy.b;
-// Per-vehicle-type rotation offset (degrees). The base64 icons are authored
-// pointing "up"/north, so 0 offset means a heading of 0 displays correctly. If
-// any icon's artwork is not north-up, set its offset here so heading 0 renders
-// pointing north without touching the upstream heading data.
+// Per-icon artwork correction in degrees. Use this to test artwork that faces
+// east (90) or south (180); it corrects the icon itself without changing heading data.
 const VEHICLE_ROTATION_OFFSET: Record<string, number> = {
   bicycle: 0,
   motorbike: 0,
@@ -57,7 +55,7 @@ export function getMapHtml(initialLat: number, initialLng: number): string {
 
     /* Vehicle marker */
     .vehicle-marker { width: 44px; height: 44px; }
-    .vehicle-marker img { width: 44px; height: 44px; object-fit: contain; transition: transform 0.2s ease; }
+    .vehicle-marker img { width: 44px; height: 44px; object-fit: contain; transition: transform 0.5s linear; }
 
     /* Map markers */
     .map-marker { display: flex; align-items: center; justify-content: center; }
@@ -168,6 +166,8 @@ export function getMapHtml(initialLat: number, initialLng: number): string {
     // ---- Camera / interaction state ----
     var lastVehicleLatLng = null;   // {lat, lng} latest known vehicle position
     var lastVehicleHeading = 0;     // latest heading in degrees
+    var currentRotation = null;     // unwrapped CSS rotation, avoids 359 -> 0 spins
+    var smoothedHeading = null;     // low-pass filtered compass heading
     var didInitialCenter = false;   // have we centered on the vehicle once on load?
     var hasActiveTrip = false;      // when true, we never auto-recenter (route view wins)
     var lastUserInteraction = 0;    // ms timestamp of the last user gesture
@@ -183,15 +183,23 @@ export function getMapHtml(initialLat: number, initialLng: number): string {
     // ---- Vehicle marker (create + smooth animate) ----
     function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
-    // Apply heading rotation to the vehicle image. The .vehicle-marker img CSS
-    // rule already has a transform transition, so a plain style assignment
-    // animates the rotation smoothly without extra work.
+    // Apply the shortest possible turn to an unwrapped rotation. Filtering the
+    // heading first prevents noisy GPS updates from making the icon twitch.
     function applyVehicleRotation(heading, vehicleType) {
-      if (!vehicleImg) return;
+      if (!vehicleImg || typeof heading !== 'number' || !isFinite(heading)) return;
       var offset = (vehicleType && typeof VEHICLE_ROTATION_OFFSET[vehicleType] === 'number')
         ? VEHICLE_ROTATION_OFFSET[vehicleType] : 0;
-      var deg = (typeof heading === 'number' ? heading : 0) + offset;
-      vehicleImg.style.transform = 'rotate(' + deg + 'deg)';
+      var target = ((heading + offset) % 360 + 360) % 360;
+      if (smoothedHeading === null) smoothedHeading = target;
+      var filterDelta = ((target - smoothedHeading + 540) % 360) - 180;
+      smoothedHeading += 0.35 * filterDelta;
+      if (currentRotation === null) {
+        currentRotation = smoothedHeading;
+      } else {
+        var delta = ((smoothedHeading - (currentRotation % 360) + 540) % 360) - 180;
+        currentRotation += delta;
+      }
+      vehicleImg.style.transform = 'rotate(' + currentRotation + 'deg)';
     }
 
     function updateVehicle(lat, lng, heading, vehicleType, color) {
