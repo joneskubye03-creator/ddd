@@ -103,6 +103,7 @@ import messageSound from '@/assets/sounds/message.mp3';
 import { createGeoFireObject } from '@/utils/geofire';
 import { getUnreadCount, listenForClientMessages, autoDeleteReadMessages, watchRideStatusForCleanup } from '@/utils/chat';
 import TripsHistory from '@/components/TripsHistory';
+import { useDriverTripHistory } from '@/hooks/useDriverTripHistory';
 import DriverSettings from '@/components/DriverSettings';
 import BottomNav from '@/components/BottomNav';
 
@@ -144,6 +145,7 @@ export default function Dashboard() {
   const { activeTrip, tripStatus, workflowType, markers, activePolyline, showPolyline, arrivalTime } =
     useActiveTrip(driverId);
   const { callState, formattedTime, startCall } = useCall();
+  const { totalEarnings, loading: tripHistoryLoading } = useDriverTripHistory(driverId, 'today');
   const callPulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -281,6 +283,7 @@ export default function Dashboard() {
             refrigerationType: data.refrigerationType || '',
           },
           rating: data.rating || 5.0,
+          activityScore: data.activityScore ?? null,
         });
 
         // Determine vehicle type for the map vehicle marker
@@ -938,14 +941,24 @@ if (activeTab === 'settings') {
               <View style={styles.statHeader}>
                 <Text style={styles.statLabel}>Today&apos;s{'\n'}earnings</Text>
               </View>
-              <Text style={styles.statValue}>£0.00</Text>
+              {tripHistoryLoading || !driverId ? (
+                <View style={styles.statSkeleton} />
+              ) : (
+                <Text style={styles.statValue}>ZMW {totalEarnings.toFixed(2)}</Text>
+              )}
             </View>
 
             <View style={styles.statCard}>
               <View style={styles.statHeader}>
                 <Text style={styles.statLabel}>Activity{'\n'}score</Text>
               </View>
-              <Text style={styles.statValue}>50%</Text>
+              {isLoading || !driverId ? (
+                <View style={styles.statSkeleton} />
+              ) : (
+                <Text style={styles.statValue}>
+                  {driverData?.activityScore == null ? '--' : `${driverData.activityScore}%`}
+                </Text>
+              )}
             </View>
 
             <View style={styles.statCard}>
@@ -1242,6 +1255,7 @@ height: 56,
   },
   statLabel: { fontSize: 12, color: '#666', lineHeight: 16 },
   statValue: { fontSize: 18, fontWeight: '700', color: '#000' },
+  statSkeleton: { width: 68, height: 22, borderRadius: 4, backgroundColor: '#e6e6e6' },
   bottomNav: {
     position: 'absolute',
     bottom: 0,
