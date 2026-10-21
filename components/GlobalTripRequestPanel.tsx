@@ -13,7 +13,8 @@ import {
 } from 'react-native';
 import { User, MapPin, Navigation, Hash, Phone, Package, Car, Truck, CheckCircle2 } from 'lucide-react-native';
 import { ref, onValue, off } from 'firebase/database';
-import { database, auth } from '@/config/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { database, auth, firestore } from '@/config/firebase';
 
 const { width, height } = Dimensions.get('window');
 
@@ -71,9 +72,11 @@ function formatMoney(amount: number | undefined, currency?: string): string {
 // The body scrolls so the Done button is never pushed off-screen.
 function FareSummaryPanel({
   data,
+  workflowType,
   onDone,
 }: {
   data: TripRequest['data'];
+  workflowType: TripRequest['workflowType'];
   onDone: () => void;
 }) {
   const slideY = useRef(new Animated.Value(-FARE_PANEL_HEIGHT)).current;
@@ -87,9 +90,10 @@ function FareSummaryPanel({
     }).start();
   }, [slideY]);
 
-  const currency = data?.currency;
+  const currency = 'ZMW';
   const total = data?.total;
   const fee = data?.fee;
+  const isStoreDelivery = workflowType === 'store_delivery';
   const customerName = data?.userName || 'Customer';
   // Derive a base fare when both total and fee are present.
   const baseFare =
@@ -115,10 +119,10 @@ function FareSummaryPanel({
 
           <View style={fareStyles.totalBox}>
             <Text style={fareStyles.totalLabel}>Total earned</Text>
-            <Text style={fareStyles.totalAmount}>{formatMoney(((data as any).workflowType === 'store_delivery' || ((data as any).items && (data as any).items.length > 0)) ? fee : total, 'ZMW')}</Text>
+            <Text style={fareStyles.totalAmount}>{formatMoney(isStoreDelivery ? fee : total, currency)}</Text>
           </View>
 
-          {(baseFare !== undefined || typeof fee === 'number') && (
+              {(!isStoreDelivery && (baseFare !== undefined || typeof fee === 'number')) && (
             <View style={fareStyles.breakdown}>
               {baseFare !== undefined && (
                 <View style={fareStyles.breakdownRow}>
@@ -128,7 +132,7 @@ function FareSummaryPanel({
               )}
               {typeof fee === 'number' && (
                 <View style={fareStyles.breakdownRow}>
-                  <Text style={fareStyles.breakdownLabel}>{(data as any).workflowType === 'store_delivery' ? 'Delivery fee' : 'Service fee'}</Text>
+                  <Text style={fareStyles.breakdownLabel}>'Service fee'</Text>
                   <Text style={fareStyles.breakdownValue}>{formatMoney(fee, currency)}</Text>
                 </View>
               )}
@@ -149,6 +153,7 @@ export default function GlobalTripRequestPanel() {
   const driverUid = auth.currentUser?.uid;
   
   const [currentRequest, setCurrentRequest] = useState<TripRequest | null>(null);
+  const [liveOrder, setLiveOrder] = useState<Record<string, any> | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   // Independent loading states for each button - DO NOT share loading state
@@ -243,6 +248,25 @@ export default function GlobalTripRequestPanel() {
       },
     })
   ).current;
+
+  // Keep provider-owned order fields live while the request panel is open. The
+  // RTDB request is only the dispatch snapshot and can lag behind Firestore.
+  useEffect(() => {
+    const orderId = currentRequest?.orderId;
+    if (!orderId) {
+      setLiveOrder(null);
+      return;
+    }
+
+    return onSnapshot(
+      doc(firestore, 'orders', orderId),
+      (snapshot) => setLiveOrder(snapshot.exists() ? (snapshot.data() as Record<string, any>) : null),
+      (error) => {
+        console.error('[v0] Live order listener error:', error);
+        setLiveOrder(null);
+      },
+    );
+  }, [currentRequest?.orderId]);
 
   // Countdown timer for incoming requests
   useEffect(() => {
@@ -375,8 +399,22 @@ export default function GlobalTripRequestPanel() {
       // panel silently disappear. Capture the trip data now since the RTDB
       // listener will clear currentRequest shortly after the status flips.
       if (status === 'completed' && currentRequest) {
+        const providerOrder = liveOrder || {};
+        const requestData = (currentRequest.data || {}) as Record<string, any>;
+        const liveField = (field: string) =>
+          providerOrder[field] ?? (currentRequest as any)[field] ?? requestData[field];
         setCompletedTrip({
-          data: currentRequest.data || ({} as TripRequest['data']),
+          data: {
+            ...requestData,
+            pickupAddress: liveField('pickupAddress'),
+            destinationAddress: liveField('destinationAddress'),
+            userName: liveField('userName'),
+            userPhone: liveField('userPhone'),
+            stops: Array.isArray(liveField('stops')) ? liveField('stops') : [],
+            total: liveField('total'),
+            fee: liveField('fee'),
+            currency: 'ZMW',
+          } as TripRequest['data'],
           workflowType: currentRequest.workflowType,
         });
         setShowFarePanel(true);
@@ -650,6 +688,7 @@ export default function GlobalTripRequestPanel() {
     return (
       <FareSummaryPanel
         data={completedTrip.data}
+        workflowType={completedTrip.workflowType}
         onDone={handleFareDone}
       />
     );
@@ -658,12 +697,26 @@ export default function GlobalTripRequestPanel() {
   // Do not render if no active request or not visible
   if (!isVisible || !currentRequest) return null;
 
-  const requestData = currentRequest.data || {};
-  const pickupAddress = requestData.pickupAddress || 'Unknown location';
-  const destinationAddress = requestData.destinationAddress || 'Unknown destination';
-  const userName = requestData.userName || 'Customer';
-  const userPhone = requestData.userPhone;
-  const stops = Array.isArray(requestData.stops) ? requestData.stops : [];
+  const requestData = (currentRequest.data || {}) as Record<string, any>;
+  const providerOrder = liveOrder || {};
+  const liveValue = (field: string) =>
+    providerOrder[field] ?? (currentRequest as any)[field] ?? requestData[field];
+  const pickupAddress = liveValue('pickupAddress') || 'Unknown location';
+  const destinationAddress = liveValue('destinationAddress') || 'Unknown destination';
+  const userName = liveValue('userName') || 'Customer';
+  const userPhone = liveValue('userPhone');
+  const stops = Array.isArray(liveValue('stops')) ? liveValue('stops') : [];
+  const liveData = {
+    ...requestData,
+    pickupAddress,
+    destinationAddress,
+    userName,
+    userPhone,
+    stops,
+    total: liveValue('total'),
+    fee: liveValue('fee'),
+    currency: 'ZMW',
+  } as TripRequest['data'];
   const statusDisplay = getStatusDisplay();
 
   return (
@@ -752,7 +805,7 @@ export default function GlobalTripRequestPanel() {
             </View>
 
             {/* Stops (between pickup and destination) */}
-            {stops.map((stop, index) => (
+            {stops.map((stop: { address: string; lat: number; lng: number }, index: number) => (
               <View style={styles.infoRow} key={`stop-${index}`}>
                 <View style={[styles.iconCircle, styles.stopIcon]}>
                   <Text style={styles.stopNumber}>{index + 1}</Text>

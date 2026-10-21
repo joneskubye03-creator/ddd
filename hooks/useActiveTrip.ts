@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ref, onValue, off } from 'firebase/database';
-import { database } from '@/config/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { database, firestore } from '@/config/firebase';
 
 export interface MarkerDef {
   id: string;
@@ -72,6 +73,20 @@ function buildStopMarkers(order: any): MarkerDef[] {
 
 export function useActiveTrip(driverId: string | null): UseActiveTripResult {
   const [activeTrip, setActiveTrip] = useState<any | null>(null);
+  const [liveOrder, setLiveOrder] = useState<any | null>(null);
+
+  useEffect(() => {
+    const orderId = activeTrip?.orderId;
+    if (!orderId) {
+      setLiveOrder(null);
+      return;
+    }
+    return onSnapshot(
+      doc(firestore, 'orders', orderId),
+      (snapshot) => setLiveOrder(snapshot.exists() ? snapshot.data() : null),
+      () => setLiveOrder(null),
+    );
+  }, [activeTrip?.orderId]);
 
   useEffect(() => {
     if (!driverId) {
@@ -106,21 +121,24 @@ export function useActiveTrip(driverId: string | null): UseActiveTripResult {
     return () => off(tripRequestsRef, 'value', listener);
   }, [driverId]);
 
-  const tripStatus: string | null = activeTrip?.status ?? null;
+  const liveTrip = activeTrip && liveOrder
+    ? { ...activeTrip, ...liveOrder, status: activeTrip.status, workflowType: activeTrip.workflowType ?? activeTrip.requestType }
+    : activeTrip;
+  const tripStatus: string | null = liveTrip?.status ?? null;
   const workflowType: WorkflowType | null =
-    activeTrip?.workflowType ?? activeTrip?.requestType ?? null;
-  const polylineToPickup: string | null = activeTrip?.driverToPickupEncodedPolyline ?? null;
-  const polylineToDestination: string | null = activeTrip?.encodedPolyline ?? null;
+    liveTrip?.workflowType ?? liveTrip?.requestType ?? null;
+  const polylineToPickup: string | null = liveTrip?.driverToPickupEncodedPolyline ?? null;
+  const polylineToDestination: string | null = liveTrip?.encodedPolyline ?? null;
 
   // Compute markers and active polyline based on status + workflow
   let markers: MarkerDef[] = [];
   let activePolyline: string | null = null;
 
-  if (activeTrip && tripStatus && workflowType) {
-    const pickup = readCoord(activeTrip, 'pickupLocation', 'pickupLat', 'pickupLng');
-    const dropoff = readCoord(activeTrip, 'destinationLocation', 'dropLat', 'dropLng');
-    const store = readCoord(activeTrip, 'storeLocation', 'storeLat', 'storeLng') || pickup;
-    const stopMarkers = buildStopMarkers(activeTrip);
+  if (liveTrip && tripStatus && workflowType) {
+    const pickup = readCoord(liveTrip, 'pickupLocation', 'pickupLat', 'pickupLng');
+    const dropoff = readCoord(liveTrip, 'destinationLocation', 'dropLat', 'dropLng');
+    const store = readCoord(liveTrip, 'storeLocation', 'storeLat', 'storeLng') || pickup;
+    const stopMarkers = buildStopMarkers(liveTrip);
 
     if (workflowType === 'direct_trip') {
       switch (tripStatus) {
@@ -180,18 +198,18 @@ export function useActiveTrip(driverId: string | null): UseActiveTripResult {
   //   started / picked_up (pickup -> destination) => tripEtaMinutes
   //   all other statuses (arrived, at_store, delivered, completed, none) => null
   let etaMinutes: number | null = null;
-  if (activeTrip && tripStatus && workflowType) {
+  if (liveTrip && tripStatus && workflowType) {
     if (workflowType === 'direct_trip') {
       if (tripStatus === 'accepted') {
-        etaMinutes = activeTrip?.driverToPickupEtaMinutes ?? null;
+        etaMinutes = liveTrip?.driverToPickupEtaMinutes ?? null;
       } else if (tripStatus === 'started') {
-        etaMinutes = activeTrip?.tripEtaMinutes ?? null;
+        etaMinutes = liveTrip?.tripEtaMinutes ?? null;
       }
     } else if (workflowType === 'store_delivery') {
       if (tripStatus === 'accepted') {
-        etaMinutes = activeTrip?.driverToPickupEtaMinutes ?? null;
+        etaMinutes = liveTrip?.driverToPickupEtaMinutes ?? null;
       } else if (tripStatus === 'picked_up') {
-        etaMinutes = activeTrip?.tripEtaMinutes ?? null;
+        etaMinutes = liveTrip?.tripEtaMinutes ?? null;
       }
     }
   }
