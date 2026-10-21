@@ -4,6 +4,7 @@ import {
   View,
   Text,
   Alert,
+  AppState,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -113,6 +114,9 @@ export default function Dashboard() {
   const [userStatus, setUserStatus] = useState<'pending' | 'approved' | 'accepted' | 'rejected'>('pending');
   const [registrationCompleted, setRegistrationCompleted] = useState(false);
   const [locationSubscription, setLocationSubscription] = useState<any>(null);
+  const locationSubscriptionRef = useRef<any>(null);
+  const trackingStartRef = useRef<Promise<void> | null>(null);
+  const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('home');
 
@@ -403,68 +407,118 @@ export default function Dashboard() {
 
   const startTracking = async () => {
     const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    if (!uid || !isOnline || locationSubscriptionRef.current) return;
+    if (trackingStartRef.current) return trackingStartRef.current;
 
-    console.log('[v0] Starting location tracking for driver:', uid);
+    trackingStartRef.current = (async () => {
+      console.log('[v0] Starting location tracking for driver:', uid);
+      setLocationPermissionDenied(false);
 
-    const subscription = await watchLocation(async (coords) => {
-      const { latitude, longitude, heading, speed } = coords;
-      const hasReliableHeading = Number.isFinite(heading) && heading >= 0 && speed > 0.8;
-      if (hasReliableHeading) stableHeadingRef.current = heading;
+      const subscription = await watchLocation(async (coords) => {
+        const { latitude, longitude, heading, speed } = coords;
+        const hasReliableHeading = Number.isFinite(heading) && heading >= 0 && speed > 0.8;
+        if (hasReliableHeading) stableHeadingRef.current = heading;
 
-      setCurrentLocation({ latitude, longitude });
-      // Feed the live map vehicle marker. GPS heading is unreliable while stationary,
-      // so retain the last moving heading instead of snapping the vehicle around.
-      setVehiclePosition({ lat: latitude, lng: longitude, heading: stableHeadingRef.current });
+        setCurrentLocation({ latitude, longitude });
+        setLocationPermissionDenied(false);
+        setVehiclePosition({ lat: latitude, lng: longitude, heading: stableHeadingRef.current });
 
-      // CRITICAL: Update driver_locations/{uid} with GeoFire format
-      // This is ONLY path client app uses to find nearby drivers
-      const geoObject = createGeoFireObject(latitude, longitude);
-      await set(ref(database, `driver_locations/${uid}`), {
-        l: geoObject.l,
-        g: geoObject.g,
+        const geoObject = createGeoFireObject(latitude, longitude);
+        await set(ref(database, `driver_locations/${uid}`), {
+          l: geoObject.l,
+          g: geoObject.g,
+          t: Date.now(),
+        });
+
+        if (activeRideId && activeRideStatus && ['accepted', 'arrived', 'started', 'at_store', 'picked_up'].includes(activeRideStatus)) {
+          try {
+            const orderRef = doc(firestore, 'orders', activeRideId);
+            await updateDoc(orderRef, {
+              driverLocation: { latitude, longitude, updatedAt: Date.now() },
+            });
+          } catch (error) {
+            // Silently fail location updates to avoid spamming console
+          }
+        }
       });
 
-      console.log('[v0] Driver location updated to driver_locations:', { lat: latitude, lng: longitude, g: geoObject.g });
-
-      // Update order location in Firestore if driver has an active order
-      if (activeRideId && activeRideStatus && ['accepted', 'arrived', 'started', 'at_store', 'picked_up'].includes(activeRideStatus)) {
-        try {
-          const orderRef = doc(firestore, 'orders', activeRideId);
-          await updateDoc(orderRef, {
-            driverLocation: {
-              latitude,
-              longitude,
-              updatedAt: Date.now(),
-            },
-          });
-        } catch (error) {
-          // Silently fail location updates to avoid spamming console
-        }
+      if (!subscription) {
+        setLocationPermissionDenied(true);
+        return;
       }
-    });
-    setLocationSubscription(subscription);
+      locationSubscriptionRef.current = subscription;
+      setLocationSubscription(subscription);
+    })();
+
+    try {
+      await trackingStartRef.current;
+    } finally {
+      trackingStartRef.current = null;
+    }
   };
 
   const stopTracking = async () => {
     const uid = auth.currentUser?.uid;
-    if (!uid) return;
+    const subscription = locationSubscriptionRef.current;
+    locationSubscriptionRef.current = null;
+    setLocationSubscription(null);
 
-    console.log('[v0] Stopping location tracking for driver:', uid);
-
-    if (locationSubscription) {
+    if (subscription) {
       try {
-        await locationSubscription.remove();
+        await subscription.remove();
       } catch (error) {
         console.log('[v0] Error removing location subscription:', error);
       }
-      setLocationSubscription(null);
     }
 
-    // Remove driver_locations/{uid} when driver goes OFFLINE
-    await remove(ref(database, `driver_locations/${uid}`));
-    console.log('[v0] Driver location removed from driver_locations');
+    if (uid) await remove(ref(database, `driver_locations/${uid}`));
   };
+
+  useEffect(() => {
+    if (!auth.currentUser?.uid || userStatus !== 'approved' || !isOnline) {
+      if (!isOnline) void stopTracking();
+      return;
+    }
+
+    let cancelled = false;
+    const seedAndStart = async () => {
+      if (locationSubscriptionRef.current || trackingStartRef.current || cancelled) return;
+      if (Platform.OS !== 'web') {
+        try {
+          const Location = await import('expo-location');
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') {
+            setLocationPermissionDenied(true);
+            return;
+          }
+          const lastKnown = await Location.getLastKnownPositionAsync({});
+          const position = lastKnown || await Location.getCurrentPositionAsync({});
+          if (!cancelled && position) {
+            setVehiclePosition({ lat: position.coords.latitude, lng: position.coords.longitude, heading: position.coords.heading || 0 });
+          }
+        } catch (error) {
+          setLocationPermissionDenied(true);
+        }
+      } else {
+        const position = await getLocation();
+        if (!cancelled && position) setVehiclePosition({ lat: position.latitude, lng: position.longitude, heading: position.heading || 0 });
+      }
+      if (!cancelled && isOnline) await startTracking();
+    };
+
+    void seedAndStart();
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void seedAndStart();
+    });
+    return () => {
+      cancelled = true;
+      appStateSubscription.remove();
+    };
+  }, [isOnline, userStatus, activeRideId, activeRideStatus]);
+
+  useEffect(() => () => {
+    void stopTracking();
+  }, []);
 
   const goOnline = async () => {
     const uid = auth.currentUser?.uid;
@@ -512,6 +566,7 @@ export default function Dashboard() {
       await set(ref(database, `driver_locations/${uid}`), {
         l: geoObject.l,
         g: geoObject.g,
+        t: Date.now(),
       });
 
       console.log('[v0] Driver went online, location set to driver_locations:', { lat: latitude, lng: longitude, g: geoObject.g });
@@ -739,12 +794,17 @@ if (activeTab === 'settings') {
           polyline={showPolyline ? activePolyline || undefined : undefined}
           vehiclePosition={vehiclePosition || undefined}
           vehicleType={vehicleType}
-  vehicleColor={vehicleColor}
-  markers={displayedMarkers}
+          vehicleColor={vehicleColor}
+          markers={displayedMarkers}
           arrivalTime={arrivalTime}
           arrivalPosition={arrivalPosition}
           hasActiveTrip={hasActiveTrip}
         />
+        {isOnline && locationPermissionDenied && (
+          <View style={{ position: 'absolute', top: 18, left: 16, right: 16, padding: 10, borderRadius: 8, backgroundColor: 'rgba(255, 248, 220, 0.96)' }}>
+            <Text style={{ color: '#765500', textAlign: 'center' }}>Location permission is unavailable. Enable it to share your live position.</Text>
+          </View>
+        )}
       </View>
 
       {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
