@@ -13,7 +13,7 @@ import {
   Animated,
 } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import ReanimatedAnimated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { database, auth, firestore } from '@/config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -217,12 +217,24 @@ export default function Dashboard() {
   const isDraggingRef = useRef(false);
   const localTransitionRef = useRef(false);
   const localChangeUntilRef = useRef(0);
+  const hasLaidOutSliderRef = useRef(false);
   const sliderStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: sliderX.value }],
   }));
   const animateSlider = (online: boolean) => {
     sliderX.value = withSpring(online ? SLIDE_RANGE : 0);
   };
+
+  useEffect(() => {
+    if (trackWidth <= 0 || isDraggingRef.current || localTransitionRef.current || Date.now() < localChangeUntilRef.current) return;
+    const nextPosition = isOnline ? SLIDE_RANGE : 0;
+    if (!hasLaidOutSliderRef.current) {
+      sliderX.value = nextPosition;
+      hasLaidOutSliderRef.current = true;
+      return;
+    }
+    animateSlider(isOnline);
+  }, [trackWidth, isOnline, SLIDE_RANGE]);
 
   // Panel animation for draggable bottom sheet (panel slides behind nav bar)
   // Collapsed: panel slides down so only scheduled card is visible above nav (85px)
@@ -307,9 +319,6 @@ export default function Dashboard() {
       setIsOnline(nextOnline);
       setIsBusy(data?.isBusy === true);
       onlineRef.current = nextOnline;
-      if (!isDraggingRef.current && !localTransitionRef.current && Date.now() >= localChangeUntilRef.current) {
-        animateSlider(nextOnline);
-      }
     });
 
     // Listen for active trip status changes (for location updates and chat)
@@ -667,7 +676,8 @@ export default function Dashboard() {
   };
 
   const gesture = Gesture.Pan()
-    .enabled(userStatus === 'approved' && registrationCompleted)
+  .runOnJS(true)
+  .enabled(userStatus === 'approved' && registrationCompleted)
     .activeOffsetX([-10, 10])
     .failOffsetY([-15, 15])
     .onStart(() => {
@@ -679,12 +689,12 @@ export default function Dashboard() {
     })
     .onEnd((event, success) => {
       if (!success) {
-        runOnJS(animateSlider)(onlineRef.current);
-        runOnJS(() => { isDraggingRef.current = false; })();
+    animateSlider(onlineRef.current);
+  isDraggingRef.current = false;
         return;
       }
       const finalPosition = Math.max(0, Math.min(SLIDE_RANGE, savedTranslateX.current + event.translationX + event.velocityX * 0.1));
-      runOnJS(handleToggleEnd)(finalPosition >= SLIDE_THRESHOLD);
+      handleToggleEnd(finalPosition >= SLIDE_THRESHOLD);
     });
 
   // Panel drag gesture for bottom sheet
@@ -986,11 +996,11 @@ if (activeTab === 'settings') {
                 {isOnline ? 'Slide to go offline' : 'Slide to go online'}
               </Text>
               <GestureDetector gesture={gesture}>
-  <Animated.View
+  <ReanimatedAnimated.View
   style={[styles.slideThumb, sliderStyle]}
   >
                   <Text style={[styles.chevronText, isOnline && styles.chevronTextOnline]}>{isOnline ? '<<' : '>>'}</Text>
-                </Animated.View>
+                </ReanimatedAnimated.View>
               </GestureDetector>
             </View>
           </Animated.View>
