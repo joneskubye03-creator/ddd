@@ -13,6 +13,7 @@ import {
   Animated,
 } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { database, auth, firestore } from '@/config/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -205,12 +206,21 @@ export default function Dashboard() {
     showChatPanelRef.current = showChatPanel;
   }, [showChatPanel]);
 
-  const sliderX = useRef(new Animated.Value(0)).current;
-  // Toggle dimensions - track is full width minus padding, thumb is 48px
-  const TRACK_WIDTH = width - 64; // 16px padding on each side + 16px margin
+  const sliderX = useSharedValue(0);
+  const [trackWidth, setTrackWidth] = useState(0);
   const THUMB_SIZE = 48;
-  const SLIDE_RANGE = TRACK_WIDTH - THUMB_SIZE - 8; // Max translation (account for 4px padding on each side)
-  const SLIDE_THRESHOLD = SLIDE_RANGE * 0.5;
+  const SLIDE_RANGE = Math.max(0, trackWidth - THUMB_SIZE - 8);
+  const SLIDE_THRESHOLD = SLIDE_RANGE * 0.6;
+  const onlineRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const localTransitionRef = useRef(false);
+  const localChangeUntilRef = useRef(0);
+  const sliderStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: sliderX.value }],
+  }));
+  const animateSlider = (online: boolean) => {
+    sliderX.value = withSpring(online ? SLIDE_RANGE : 0);
+  };
 
   // Panel animation for draggable bottom sheet (panel slides behind nav bar)
   // Collapsed: panel slides down so only scheduled card is visible above nav (85px)
@@ -290,14 +300,12 @@ export default function Dashboard() {
     const driversOnlineRef = ref(database, `drivers_online/${uid}`);
     const onlineListener = onValue(driversOnlineRef, (snapshot) => {
       const data = snapshot.val();
-      if (data) {
-        setIsOnline(data.isOnline === true);
-        setIsBusy(data.isBusy === true);
-        sliderX.setValue(data.isOnline ? SLIDE_RANGE : 0);
-      } else {
-        setIsOnline(false);
-        setIsBusy(false);
-        sliderX.setValue(0);
+      const nextOnline = data?.isOnline === true;
+      setIsOnline(nextOnline);
+      setIsBusy(data?.isBusy === true);
+      onlineRef.current = nextOnline;
+      if (!isDraggingRef.current && !localTransitionRef.current && Date.now() >= localChangeUntilRef.current) {
+        animateSlider(nextOnline);
       }
     });
 
@@ -604,14 +612,9 @@ export default function Dashboard() {
     });
 
     setIsOnline(true);
+    onlineRef.current = true;
     await startTracking();
-
-    Animated.spring(sliderX, {
-      toValue: SLIDE_RANGE,
-      useNativeDriver: true,
-      tension: 100,
-      friction: 10,
-    }).start();
+    return true;
   };
 
   const goOffline = async () => {
@@ -619,16 +622,10 @@ export default function Dashboard() {
     if (!uid) return;
 
     setIsOnline(false);
+    onlineRef.current = false;
     await stopTracking();
-
     await clearDriverPresence(uid);
-
-    Animated.spring(sliderX, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 100,
-      friction: 10,
-    }).start();
+    return true;
   };
 
   // All trip lifecycle handling is now done via GlobalTripRequestPanel
@@ -637,22 +634,54 @@ export default function Dashboard() {
   const startX = useRef(0);
   const savedTranslateX = useRef(0);
 
+  const handleToggleEnd = async (nextOnline: boolean) => {
+    isDraggingRef.current = false;
+    if (nextOnline === onlineRef.current) {
+      animateSlider(onlineRef.current);
+      return;
+    }
+    if (!nextOnline && (isBusy || hasActiveTrip)) {
+      setToastData({ clientName: 'Notice', message: 'Finish your trip first' });
+      setShowToast(true);
+      animateSlider(onlineRef.current);
+      return;
+    }
+    localTransitionRef.current = true;
+    localChangeUntilRef.current = Date.now() + 1500;
+    try {
+      if (nextOnline) await goOnline();
+      else await goOffline();
+    } catch (error) {
+      console.log('[v0] Toggle transition failed:', error);
+      setToastData({ clientName: 'Notice', message: 'Unable to change your online status' });
+      setShowToast(true);
+      onlineRef.current = false;
+      setIsOnline(false);
+    } finally {
+      localTransitionRef.current = false;
+      animateSlider(onlineRef.current);
+    }
+  };
+
   const gesture = Gesture.Pan()
     .enabled(userStatus === 'approved' && registrationCompleted)
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-15, 15])
     .onStart(() => {
-      savedTranslateX.current = isOnline ? SLIDE_RANGE : 0;
+      isDraggingRef.current = true;
+      savedTranslateX.current = onlineRef.current ? SLIDE_RANGE : 0;
     })
     .onUpdate((event) => {
-      const newValue = Math.max(0, Math.min(savedTranslateX.current + event.translationX, SLIDE_RANGE));
-      sliderX.setValue(newValue);
+      sliderX.value = Math.max(0, Math.min(savedTranslateX.current + event.translationX, SLIDE_RANGE));
     })
-    .onEnd((event) => {
-      const finalPosition = savedTranslateX.current + event.translationX;
-      if (finalPosition > SLIDE_THRESHOLD) {
-        goOnline();
-      } else {
-        goOffline();
+    .onEnd((event, success) => {
+      if (!success) {
+        runOnJS(animateSlider)(onlineRef.current);
+        runOnJS(() => { isDraggingRef.current = false; })();
+        return;
       }
+      const finalPosition = Math.max(0, Math.min(SLIDE_RANGE, savedTranslateX.current + event.translationX + event.velocityX * 0.1));
+      runOnJS(handleToggleEnd)(finalPosition >= SLIDE_THRESHOLD);
     });
 
   // Panel drag gesture for bottom sheet
@@ -925,19 +954,17 @@ if (activeTab === 'settings') {
             ]}
             pointerEvents={(userStatus === 'approved' && registrationCompleted) ? 'auto' : 'none'}
           >
-            <View style={[styles.slideTrack, isOnline && styles.slideTrackOnline]}>
-              <Text style={[styles.slideInstructionText, isOnline && styles.slideInstructionTextOnline]}>
+  <View
+  onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+  style={[styles.slideTrack, isOnline && styles.slideTrackOnline]}
+  >
+  <Text style={[styles.slideInstructionText, isOnline && styles.slideInstructionTextOnline]}>
                 {isOnline ? 'Slide to go offline' : 'Slide to go online'}
               </Text>
               <GestureDetector gesture={gesture}>
-                <Animated.View
-                  style={[
-                    styles.slideThumb,
-                    {
-                      transform: [{ translateX: sliderX }],
-                    },
-                  ]}
-                >
+  <Animated.View
+  style={[styles.slideThumb, sliderStyle]}
+  >
                   <Text style={[styles.chevronText, isOnline && styles.chevronTextOnline]}>{isOnline ? '<<' : '>>'}</Text>
                 </Animated.View>
               </GestureDetector>
