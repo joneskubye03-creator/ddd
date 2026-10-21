@@ -26,7 +26,9 @@ export async function callApi(path: string, body: Record<string, unknown>, idTok
     throw new Error(`Call request failed (${response.status})`);
   }
   if (!response.ok || result.success === false) {
-    throw new Error(result.error || `Call request failed (${response.status})`);
+    const error = new Error(result.error || `Call request failed (${response.status})`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return result;
 }

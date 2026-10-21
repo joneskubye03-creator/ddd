@@ -860,35 +860,46 @@ if (activeTab === 'settings') {
         )}
       </View>
 
-      {activeTrip && ((workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '')) || (workflowType === 'store_delivery' && ['accepted', 'at_store', 'picked_up'].includes(tripStatus || ''))) && (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={callState === 'idle' ? 'Call client' : callState === 'calling' ? 'Calling' : `In call · ${formattedTime}`}
-          disabled={callState !== 'idle'}
-          onPress={() => startCall(activeTrip.orderId)}
-          style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}
-        >
-          <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
-            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
-          </Animated.View>
-          <Text style={[styles.callTimer, callState !== 'in-call' && styles.callTimerLight]}>{callState === 'idle' ? 'Call client' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}</Text>
-        </TouchableOpacity>
-      )}
-
-      {activeTrip && workflowType === 'store_delivery' && ['accepted', 'at_store'].includes(tripStatus || '') && (
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel={callState === 'idle' ? 'Call store' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}
-          disabled={callState !== 'idle'}
-          onPress={() => startCall(activeTrip.orderId, 'store')}
-          style={[styles.callButton, { transform: [{ translateY: 70 }] }, callState === 'in-call' && styles.callButtonActive]}
-        >
-          <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
-            <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
-          </Animated.View>
-          <Text style={[styles.callTimer, callState !== 'in-call' && styles.callTimerLight]}>{callState === 'idle' ? 'Call store' : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}</Text>
-        </TouchableOpacity>
-      )}
+      {(() => {
+        const liveDriverStatus = String(activeTrip?.driverStatus || '').toLowerCase();
+        const isStoreAssigned = workflowType === 'store_delivery' && (
+          (tripStatus === 'accepted' && ['assigned', 'driver_assigned'].includes(liveDriverStatus)) ||
+          (tripStatus === 'at_store' && liveDriverStatus === 'at_store')
+        );
+        const storeCallable = activeTrip?.storeCallable !== false;
+        const callTarget = workflowType === 'store_delivery' && isStoreAssigned && storeCallable ? 'store' as const : undefined;
+        const callLabel = workflowType === 'direct_trip' ? 'Call rider' : callTarget ? 'Call store' : 'Call customer';
+        const canCall = !!activeTrip && (
+          workflowType === 'direct_trip' && ['accepted', 'arrived', 'started'].includes(tripStatus || '') ||
+          workflowType === 'store_delivery' && ((isStoreAssigned && storeCallable) || ['picked_up', 'delivered'].includes(tripStatus || ''))
+        );
+        if (!canCall) return null;
+        const handleCall = async () => {
+          if (callState !== 'idle' || !activeTrip) return;
+          try {
+            await startCall(activeTrip.orderId, callTarget);
+          } catch (error: any) {
+            if (error?.status === 409 || error?.status === 403) {
+              setToastData({ clientName: '', message: error.message || 'Call is not available.' });
+              setShowToast(true);
+            }
+          }
+        };
+        return (
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={callState === 'idle' ? callLabel : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}
+            disabled={callState !== 'idle'}
+            onPress={handleCall}
+            style={[styles.callButton, callState === 'in-call' && styles.callButtonActive]}
+          >
+            <Animated.View style={{ opacity: callState === 'calling' ? callPulse : 1 }}>
+              <Phone color={callState === 'in-call' ? '#fff' : '#18201b'} size={24} />
+            </Animated.View>
+            <Text style={[styles.callTimer, callState !== 'in-call' && styles.callTimerLight]}>{callState === 'idle' ? callLabel : callState === 'calling' ? 'Calling…' : `In call · ${formattedTime}`}</Text>
+          </TouchableOpacity>
+        );
+      })()}
 
       {/* DRAGGABLE SLIDING PANEL - Contains toggle inside */}
       <Animated.View
